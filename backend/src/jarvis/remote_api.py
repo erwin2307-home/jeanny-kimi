@@ -279,13 +279,18 @@ def parse_timer_seconds(text: str) -> int | None:
     return total if found else None
 
 
-# "nenn ihn X" / "benenn ihn X" / "bennen ihn X" (common typo/mishearing
-# of "benennen") — whatever follows the naming verb (and an optional
-# "ihn"/"ihr"/"es"/"den timer") becomes the timer's label. Only this
-# explicit-naming-verb order is supported; a name given before the verb
-# ("timer chip washing auf 5 minuten") has no reliable boundary to parse.
+# "nenn ihn X" / "benenn ihn X" / "bennen ihn X" / "benne ihn X" (common
+# typos/mishearings of "benennen" — "benne" in particular is a frequent
+# STT-shortened form, missing a syllable) — whatever follows the naming
+# verb (and an optional "ihn"/"ihr"/"es"/"den timer") becomes the timer's
+# label. Works in the same utterance as the duration ("timer setzen auf
+# 4 minuten und benenne ihn Chip Wash" — .search() finds this clause
+# anywhere in the text, so the duration clause before it doesn't matter).
+# Only this explicit-naming-verb order is supported; a name given before
+# the verb with no naming word at all ("timer chip washing auf 5
+# minuten") has no reliable boundary to parse.
 _TIMER_NAME_RE = re.compile(
-    r"\b(?:benenn\w*|bennen\w*|nenn\w*)\b\s*"
+    r"\b(?:benenn\w*|bennen\w*|benne\w*|nenn\w*)\b\s*"
     r"(?:ihn|ihr|es|den\s+timer|diesen\s+timer)?\s*(.+)$",
     re.IGNORECASE,
 )
@@ -311,8 +316,13 @@ def timer_reply(seconds: int | None, name: str | None = None) -> str:
         parts.append(f"{minutes} Minute{'n' if minutes != 1 else ''}")
     if secs:
         parts.append(f"{secs} Sekunde{'n' if secs != 1 else ''}")
-    label = f" '{name}'" if name else ""
-    return f"Timer{label} auf {' '.join(parts)} gestellt."
+    if name:
+        return f"Timer '{name}' auf {' '.join(parts)} gestellt."
+    # No name given — nudge for one rather than silently leaving it
+    # unnamed. The voice widget listens for the next utterance as the
+    # name (see VOICE_WIDGET_HTML's pendingTimerNameFor), so this question
+    # isn't just rhetorical.
+    return f"Timer auf {' '.join(parts)} gestellt. Soll ich ihn benennen?"
 
 
 class ChatRequest(BaseModel):

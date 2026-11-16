@@ -333,6 +333,21 @@ VOICE_WIDGET_HTML = r"""
     let timers = []; // {id, remaining, name}
     let timerIdSeq = 0;
 
+    // When a timer is created without a name, the server's reply asks
+    // "Soll ich ihn benennen?" (see timer_reply() in remote_api.py). The
+    // next utterance within this window is then taken as that timer's
+    // name instead of a normal chat/command — purely client-side, no
+    // extra server round-trip needed since the timer chip already lives
+    // only in this widget's local `timers` array.
+    let pendingTimerNameFor = null; // timer id, or null
+    let pendingTimerNameDeadline = 0;
+    const TIMER_NAME_WINDOW_MS = 25000;
+    const TIMER_NAME_DISMISS_RE = /^(nein|nein danke|nicht n[öo]tig|passt so|egal|lass mal)\b/i;
+    // Strip naming-verb scaffolding in case the user repeats it anyway
+    // ("ja, nenn ihn Pizza" -> "Pizza").
+    const TIMER_NAME_SCAFFOLD_RE =
+      /^(ja[,.]?\s*)?(benenn\w*|bennen\w*|benne\w*|nenn\w*)\s*(ihn|ihr|es|den\s+timer|diesen\s+timer)?\s*/i;
+
     function formatMMSS(s) {
       const m = Math.floor(s / 60);
       const sec = s % 60;
@@ -360,8 +375,10 @@ VOICE_WIDGET_HTML = r"""
     }
 
     function addTimer(totalSeconds, name, onComplete) {
-      timers.push({ id: ++timerIdSeq, remaining: totalSeconds, name: name || null, onComplete: onComplete || null });
+      const id = ++timerIdSeq;
+      timers.push({ id, remaining: totalSeconds, name: name || null, onComplete: onComplete || null });
       renderTimers();
+      return id;
     }
 
     setInterval(() => {
@@ -609,8 +626,32 @@ VOICE_WIDGET_HTML = r"""
           }
           const body = await resp.json();
           addLine("you", body.transcript);
+
+          if (pendingTimerNameFor !== null && Date.now() < pendingTimerNameDeadline) {
+            const timerId = pendingTimerNameFor;
+            pendingTimerNameFor = null;
+            const raw = (body.transcript || "").trim();
+            if (TIMER_NAME_DISMISS_RE.test(raw)) {
+              addLine("jarvis", "Ok, bleibt unbenannt.");
+            } else {
+              const name = raw.replace(TIMER_NAME_SCAFFOLD_RE, "").trim() || raw;
+              const t = timers.find((x) => x.id === timerId);
+              if (t) { t.name = name; renderTimers(); }
+              addLine("jarvis", "Timer benannt: '" + name + "'.");
+            }
+            setState("idle");
+            return;
+          }
+          pendingTimerNameFor = null; // window expired without an answer
+
           addLine("jarvis", body.reply);
-          if (body.timer_seconds) addTimer(body.timer_seconds, body.timer_name);
+          if (body.timer_seconds) {
+            const newId = addTimer(body.timer_seconds, body.timer_name);
+            if (!body.timer_name) {
+              pendingTimerNameFor = newId;
+              pendingTimerNameDeadline = Date.now() + TIMER_NAME_WINDOW_MS;
+            }
+          }
           if (COOLDOWN_TRIGGER_RE.test(body.transcript)) startCooldown();
           else if (CONTINUE_RE.test(body.transcript)) handleCooldownContinue();
           setState("speaking");

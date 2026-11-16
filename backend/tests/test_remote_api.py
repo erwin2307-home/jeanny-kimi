@@ -380,6 +380,7 @@ def test_voice_bare_reagent_abbreviation_bypasses_llm(client, fixtures_dir):
         ("timer auf 5 minuten und nenne ihn chip washing", "chip washing"),
         ("stell einen timer auf 5 minuten und benenn ihn chip washing", "chip washing"),
         ("timer auf 5 minuten und bennen ihn chip washing", "chip washing"),  # user's typo
+        ("timer setzen auf 4 minuten und benne ihn pizza", "pizza"),  # "benne" — STT-shortened form
         ("timer auf 10 minuten nenn ihn pause", "pause"),
         ("timer auf 5 minuten", None),
     ],
@@ -388,6 +389,21 @@ def test_parse_timer_name(client, text, expected_name):
     from jarvis.remote_api import parse_timer_name
 
     assert parse_timer_name(text) == expected_name
+
+
+def test_timer_reply_without_name_asks_whether_to_name_it(client):
+    from jarvis.remote_api import timer_reply
+
+    reply = timer_reply(240, None)
+    assert "gestellt" in reply
+    assert "benennen" in reply.lower()
+
+
+def test_timer_reply_with_name_does_not_ask(client):
+    from jarvis.remote_api import timer_reply
+
+    reply = timer_reply(240, "Pizza")
+    assert "benennen" not in reply.lower()
 
 
 def test_chat_timer_with_name_includes_it_in_reply_and_response(client):
