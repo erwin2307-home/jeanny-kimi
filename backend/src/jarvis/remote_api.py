@@ -205,17 +205,51 @@ def time_answer(now: datetime | None = None) -> str:
 # per-user state and the browser tab is what's actually open) — this just
 # detects the request and parses the duration deterministically, for the
 # same hallucination-avoidance reason as time_answer() above.
-_TIMER_TRIGGER_RE = re.compile(r"\btimer\b", re.IGNORECASE)
+# Common misrecognitions of the English loanword "Timer" by German STT
+# (faster-whisper-base): it's an unusual sound shape for German, and the
+# model sometimes writes it as something closer to how it sounds spoken
+# with a German accent, or splits/merges it with an adjacent word.
+_TIMER_TRIGGER_RE = re.compile(r"\b(timer|taimer|teimer|thaimer)\b", re.IGNORECASE)
 
-_DE_NUMBER_WORDS = {
-    "ein": 1, "eine": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5,
-    "sechs": 6, "sieben": 7, "acht": 8, "neun": 9, "zehn": 10, "elf": 11,
-    "zwölf": 12, "fünfzehn": 15, "zwanzig": 20, "dreißig": 30, "vierzig": 40,
-    "fünfundvierzig": 45, "fünfzig": 50, "sechzig": 60, "neunzig": 90,
-}
 
+def _build_de_number_words() -> dict[str, int]:
+    """Every German number word from 1-99 (plus a few common round
+    multi-hundreds), including teens (dreizehn..neunzehn) and compounds
+    (einundzwanzig, siebenundsiebzig, ...) that a hand-picked list keeps
+    missing — those are exactly the durations a real timer request uses
+    ("13 Minuten", "zweiundzwanzig Minuten", "achtzig Sekunden", ...)."""
+    units = {
+        "ein": 1, "eine": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4,
+        "fünf": 5, "sechs": 6, "sieben": 7, "acht": 8, "neun": 9,
+    }
+    # Short forms used only as a compound prefix (zwei -> zweiund...).
+    unit_prefix = {
+        1: "ein", 2: "zwei", 3: "drei", 4: "vier", 5: "fünf",
+        6: "sechs", 7: "sieben", 8: "acht", 9: "neun",
+    }
+    teens = {
+        "zehn": 10, "elf": 11, "zwölf": 12, "dreizehn": 13, "vierzehn": 14,
+        "fünfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18,
+        "neunzehn": 19,
+    }
+    tens = {
+        "zwanzig": 20, "dreißig": 30, "vierzig": 40, "fünfzig": 50,
+        "sechzig": 60, "siebzig": 70, "achtzig": 80, "neunzig": 90,
+    }
+    words: dict[str, int] = {**units, **teens, **tens}
+    for tens_word, tens_val in tens.items():
+        for n, prefix in unit_prefix.items():
+            words[f"{prefix}und{tens_word}"] = tens_val + n
+    words["hundert"] = 100
+    return words
+
+
+_DE_NUMBER_WORDS = _build_de_number_words()
+
+# Longest words first: "einunddreißig" must win over the bare "drei" (or
+# "ein") that regex alternation would otherwise match as a prefix.
 _TIMER_DURATION_RE = re.compile(
-    r"(\d+|" + "|".join(_DE_NUMBER_WORDS) + r")\s*"
+    r"(\d+|" + "|".join(sorted(_DE_NUMBER_WORDS, key=len, reverse=True)) + r")\s*"
     r"(stunden?|std\.?|minuten?|min\.?|sekunden?|sek\.?)",
     re.IGNORECASE,
 )

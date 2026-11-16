@@ -180,6 +180,11 @@ def test_voice_answers_time_query_deterministically_without_llm(client, fixtures
         ("timer auf 1 stunde 30 minuten", 5400),
         ("timer auf zehn minuten", 600),
         ("timer auf fünf minuten", 300),
+        ("timer auf dreizehn minuten", 780),
+        ("timer auf siebzehn minuten", 1020),
+        ("timer auf einundzwanzig minuten", 1260),
+        ("timer auf siebenundsiebzig sekunden", 77),
+        ("timer auf achtzig sekunden", 80),
     ],
 )
 def test_parse_timer_seconds_parses_durations(client, text, expected_seconds):
@@ -194,7 +199,10 @@ def test_parse_timer_seconds_returns_none_without_a_duration(client):
     assert parse_timer_seconds("timer") is None
 
 
-@pytest.mark.parametrize("text", ["timer", "stell einen timer", "Timer auf 5 Minuten"])
+@pytest.mark.parametrize(
+    "text",
+    ["timer", "stell einen timer", "Timer auf 5 Minuten", "Taimer auf 5 Minuten", "teimer starten"],
+)
 def test_is_timer_query_matches_timer_mentions(client, text):
     from jarvis.remote_api import is_timer_query
 
