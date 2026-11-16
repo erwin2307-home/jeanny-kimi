@@ -34,14 +34,6 @@ _REACTION_SYSTEM_PROMPT = (
     "separat."
 )
 
-# Spoken immediately when coding_handler claims a transcript — the actual
-# generation + execution happens in a detached background task that
-# outlives this turn, so this ack is all the user hears right now.
-_CODING_ACK = (
-    "Alles klar, ich programmiere das jetzt im Hintergrund. Ein Fenster "
-    "öffnet sich gleich."
-)
-
 
 EmitFn = Callable[[Event], None]
 
@@ -100,7 +92,6 @@ class Orchestrator:
         now_fn: Callable[[], float] | None = None,
         qa_matcher: Callable[[str], str | None] | None = None,
         topic_context: Callable[[str], str | None] | None = None,
-        coding_handler: Callable[[str], bool] | None = None,
     ) -> None:
         self._mic = mic
         self._speaker = speaker
@@ -124,7 +115,6 @@ class Orchestrator:
         self._now: Callable[[], float] = now_fn or time.monotonic
         self._qa_matcher = qa_matcher
         self._topic_context = topic_context
-        self._coding_handler = coding_handler
         # Picker injectable so tests can pin a known filler.
         if filler_picker is not None:
             self._pick_filler = filler_picker
@@ -276,27 +266,12 @@ class Orchestrator:
                 self._emit(StateEvent(value=State.IDLE))
                 return
 
-            # Coding fast-path: coding_handler itself decides whether this
-            # is a code-generation request AND, if so, has already fired
-            # off the background generation+execution task (fire-and-
-            # forget — outlives this turn). Takes top priority: speak a
-            # fixed ack and skip the LLM entirely, same as a QA instant
-            # match below, so the turn completes immediately regardless
-            # of how long generation takes in the background.
-            is_coding_request = (
-                self._coding_handler(text) if self._coding_handler is not None else False
-            )
-
             # QA fast-path: a known, pre-researched question answers
             # instantly, skipping the LLM entirely. Checked here (after
             # STT) since it needs the actual transcript; takes priority
             # over the fast_llm reaction decision below — there's nothing
             # to mask when the answer is already known.
-            qa_answer = (
-                _CODING_ACK
-                if is_coding_request
-                else (self._qa_matcher(text) if self._qa_matcher is not None else None)
-            )
+            qa_answer = self._qa_matcher(text) if self._qa_matcher is not None else None
 
             # Deferred filler decision for the fast_llm case: complex queries
             # get a reaction to the actual transcript (masks the slower/cloud

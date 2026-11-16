@@ -7,45 +7,31 @@ exposes plain chat (HybridLlm, same routing/time-injection as the voice
 path) plus the combined QA fast-path (qa_topics.py — BeadChip, NGS,
 Blutanalyse and Pharmakogenomik: exact-match answers + BeadChip's
 reagent lookup + broad topic-context injection for the LLM).
-No coding_handler (auto-runs generated scripts — would be remote code
-execution if exposed to the internet), no WebSocket, no mic/speaker/
-wake/VAD/STT/TTS.
+No WebSocket, no mic/speaker/wake/VAD/STT/TTS. This fork ("jeanny kimi")
+dropped the coding fast-path and browser-games generation entirely for
+speed — see CLAUDE.md.
 
 Run: uv run uvicorn jarvis.remote_api:app --host 0.0.0.0 --port 8800
 """
 from __future__ import annotations
 
-import asyncio
 import base64
 import io
-import json
 import re
 import secrets
-import tempfile
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
-from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import soundfile as sf  # type: ignore[import-untyped]
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from loguru import logger
 from pydantic import BaseModel
 
 from jarvis import __version__
-from jarvis.coding import progress_path_for, write_progress
 from jarvis.config import get_settings
-from jarvis.games import (
-    GAME_IDS,
-    GAMES_SYSTEM_PROMPT,
-    build_smoke_harness,
-    extract_html_game,
-    extract_script_body,
-    game_prompt,
-)
 from jarvis.llm import (
     HybridLlm,
     Llm,
@@ -147,25 +133,6 @@ def _build_tts() -> Tts:
 app.state.llm = _build_llm()
 app.state.stt = _build_stt()
 app.state.tts = _build_tts()
-# Dedicated model load for games.py's game-generation endpoints below —
-# always the "large" coding tier (settings.coding_model), independent of
-# app.state.llm's own routing. A full game is a much bigger ask than a
-# normal chat/voice answer, hence game_max_tokens instead of
-# llm_max_tokens.
-app.state.game_llm = RealLlm(
-    host=settings.llm_host,
-    model=settings.coding_model,
-    system_prompt=GAMES_SYSTEM_PROMPT,
-    timeout_s=settings.llm_timeout_s,
-    max_tokens=settings.game_max_tokens,
-)
-# No bigger-model escalation on a smoke-check failure — tried both
-# qwen2.5-coder:32b and its lighter q3_K_M quant as a failure-only
-# fallback; both ended the same way live, Ollama dropping the
-# connection shortly after the model switch and unloading it (costing
-# 15-20 minutes for nothing each time). The instability tracked the
-# model switch itself, not just memory pressure, so _generate_game
-# below retries the SAME tier once instead.
 
 # Short-lived tokens so the browser never has to carry the real master
 # key. The Streamlit frontend's voice widget runs entirely client-side
@@ -181,30 +148,6 @@ app.state.game_llm = RealLlm(
 SESSION_TOKEN_TTL = timedelta(hours=12)
 _session_tokens: dict[str, datetime] = {}
 app.state.session_tokens = _session_tokens
-
-# Single-use, short-TTL tickets for serve_game() below — a game page is
-# loaded via a top-level browser navigation (window.open), which can't
-# attach an X-API-Key header, so it needs *some* credential in the URL.
-# The real master key or even the 12h session token would sit in browser
-# history/referrers/proxy logs for far longer than needed; minted only
-# from an already-authenticated request, scoped to one game, consumed on
-# first use. In-memory only, same as session_tokens.
-GAME_TICKET_TTL = timedelta(minutes=5)
-_game_tickets: dict[str, tuple[str, datetime]] = {}
-app.state.game_tickets = _game_tickets
-
-# In-process, in-memory dispatch guard for generate_game() below — NOT
-# the on-disk progress file. A file-based "is it already generating?"
-# check is TOCTOU-racy (two near-simultaneous requests can both read
-# "not generating" before either writes "generating") and, worse, a
-# crashed background task would leave the file stuck on "generating"
-# forever with nothing to ever clear it. A plain set with no `await`
-# between the membership check and the insert is already atomic under
-# asyncio's cooperative scheduling (no other coroutine can run in that
-# gap), and it's cleared in generate's `finally`, so a crash just drops
-# it — same reasoning as coding.py's coding_state dict needing no lock.
-_game_in_flight: set[str] = set()
-app.state.game_in_flight = _game_in_flight
 
 
 def _decode_wav_to_pcm16(raw: bytes, target_sr: int) -> npt.NDArray[np.int16]:
@@ -526,236 +469,3 @@ async def voice(
         timer_name=timer_name,
     )
 
-
-# --- Browser-playable games (games.py) -------------------------------
-# See games.py's module docstring for why this is a different, safe-to-
-# expose-remotely trust model than the Python coding fast-path (which
-# app.py deliberately keeps out of this remote API entirely).
-
-
-def _game_html_path(game: str) -> Path:
-    return settings.games_dir / f"{game}.html"
-
-
-def _game_progress_path(game: str) -> Path:
-    return progress_path_for(game, settings.games_dir)
-
-
-def _read_progress(game: str) -> dict[str, object]:
-    path = _game_progress_path(game)
-    try:
-        data: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
-        return data
-    except (OSError, ValueError):
-        return {}
-
-
-async def _run_smoke_check(html: str) -> str | None:
-    """None if the generated game's script ran a few ticks in a sandboxed
-    Node `vm` context (no require/process/filesystem access — see
-    games.py's build_smoke_harness) without throwing; otherwise a short
-    diagnostic string for the server log only (never reflected to a
-    caller — _generate_game below only ever writes a fixed error code to
-    the progress file, same reasoning as its own exception handler)."""
-    script = extract_script_body(html)
-    if script is None:
-        return "no_script_tag"
-    harness = build_smoke_harness(script)
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".js", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(harness)
-            harness_path = f.name
-    except OSError as exc:
-        return f"could_not_write_harness: {exc!r}"
-    try:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "node",
-                harness_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            # node isn't installed on this machine — degrade gracefully
-            # rather than permanently blocking every game generation on
-            # an optional quality check.
-            logger.warning("games: node not found on PATH, skipping smoke-check")
-            return None
-        try:
-            _, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=settings.game_smoke_timeout_s
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return "smoke_check_timed_out"
-        if proc.returncode != 0:
-            return stderr.decode("utf-8", errors="replace")[:500]
-        return None
-    finally:
-        Path(harness_path).unlink(missing_ok=True)
-
-
-async def _attempt_generation(
-    game: str, llm: Llm, model_name: str, progress_path: Path
-) -> str | None:
-    """One end-to-end try with one model: generate, extract, smoke-check.
-    Returns the verified html, or None if anything about this attempt
-    failed (caller decides whether to escalate or give up)."""
-    full = ""
-    async for ev in llm.chat([{"role": "user", "content": game_prompt(game)}]):
-        if ev.kind == "chunk":
-            full += ev.text
-            write_progress(
-                progress_path,
-                status="generating",
-                tokens=len(full) // 4,
-                max_tokens=settings.game_max_tokens,
-                model=model_name,
-            )
-        elif ev.kind == "done":
-            full = ev.text or full
-    html = extract_html_game(full)
-    if html is None:
-        logger.warning(f"games: model produced no valid game for {game!r} (model={model_name})")
-        return None
-    smoke_error = await _run_smoke_check(html)
-    if smoke_error is not None:
-        logger.warning(
-            f"games: smoke-check failed for {game!r} (model={model_name}): {smoke_error}"
-        )
-        return None
-    return html
-
-
-async def _generate_game(game: str) -> None:
-    progress_path = _game_progress_path(game)
-    write_progress(
-        progress_path,
-        status="generating",
-        tokens=0,
-        max_tokens=settings.game_max_tokens,
-        model=settings.coding_model,
-    )
-    try:
-        html = await _attempt_generation(game, app.state.game_llm, settings.coding_model, progress_path)
-        if html is None:
-            # Retry ONCE, same model/tier — not a bigger model. Two
-            # separate escalation attempts (first qwen2.5-coder:32b at
-            # Q4_K_M, then again at the lighter q3_K_M quant) both ended
-            # in the same way: Ollama's connection dropped mid-stream
-            # and unloaded the model shortly after the tier switch,
-            # costing 15-20 minutes for nothing both times (see git
-            # history on this line for the live-tested detail) — the
-            # instability tracks the MODEL SWITCH itself, not just
-            # memory pressure, so switching models is no longer
-            # attempted at all. A same-tier retry costs little and
-            # still has real value: generation is stochastic, so a
-            # second attempt can simply avoid whatever bug the first
-            # one hit (this is exactly how it resolved live for tetris).
-            logger.info(f"games: {game!r} failed with {settings.coding_model}, retrying once")
-            html = await _attempt_generation(game, app.state.game_llm, settings.coding_model, progress_path)
-        if html is None:
-            write_progress(progress_path, status="error", error="generation_failed_smoke_check")
-            return
-        settings.games_dir.mkdir(parents=True, exist_ok=True)
-        # Temp-file-then-replace, same reasoning as write_progress's own
-        # atomic write — serve_game() should never be able to read a
-        # half-written file.
-        final_path = _game_html_path(game)
-        tmp_path = final_path.with_suffix(".html.tmp")
-        tmp_path.write_text(html, encoding="utf-8")
-        tmp_path.replace(final_path)
-        write_progress(progress_path, status="done")
-        logger.info(f"games: generated {game}")
-    except Exception as exc:
-        # Full detail stays server-side in the log only — the progress
-        # file is readable by anyone holding a (possibly leaked) session
-        # token via /games/{game}/status, so it gets a fixed, generic
-        # code instead of str(exc), which could otherwise reflect
-        # internal paths/config/stack details back to that caller.
-        logger.warning(f"games: generation failed for {game!r} (ignored): {exc!r}")
-        write_progress(progress_path, status="error", error="generation_failed")
-    finally:
-        app.state.game_in_flight.discard(game)
-
-
-@app.post("/games/{game}/generate")
-async def generate_game(game: str, x_api_key: str | None = Header(default=None)) -> dict[str, str]:
-    _check_key(x_api_key)
-    if game not in GAME_IDS:
-        raise HTTPException(status_code=404, detail=f"unknown game {game!r}")
-    if _game_html_path(game).exists():
-        # Already generated — serve the existing file, never silently
-        # regenerate (and overwrite) just because the button was
-        # clicked again. Games are meant to feel pre-made and instantly
-        # playable, not rebuilt from scratch on every click.
-        return {"status": "done"}
-    if game in app.state.game_in_flight:
-        return {"status": "generating"}  # already in flight — don't double-dispatch
-    app.state.game_in_flight.add(game)  # no `await` since the check above — atomic
-    asyncio.create_task(_generate_game(game))
-    return {"status": "generating"}
-
-
-@app.get("/games/{game}/status")
-async def game_status(game: str, x_api_key: str | None = Header(default=None)) -> dict[str, object]:
-    _check_key(x_api_key)
-    if game not in GAME_IDS:
-        raise HTTPException(status_code=404, detail=f"unknown game {game!r}")
-    if _game_html_path(game).exists():
-        # The file's existence always wins, even over a stale
-        # "generating" progress record left behind by an abandoned or
-        # crashed earlier attempt — otherwise a finished game can get
-        # stuck reporting "generating" forever.
-        return {"status": "done"}
-    progress = _read_progress(game)
-    if progress:
-        return progress
-    return {"status": "idle"}
-
-
-@app.post("/games/{game}/ticket")
-async def mint_game_ticket(
-    game: str, x_api_key: str | None = Header(default=None)
-) -> dict[str, str]:
-    """Authenticated (X-API-Key header) — mints the single-use ticket
-    serve_game() below accepts instead of the real key/session token."""
-    _check_key(x_api_key)
-    if game not in GAME_IDS:
-        raise HTTPException(status_code=404, detail=f"unknown game {game!r}")
-    if not _game_html_path(game).exists():
-        raise HTTPException(status_code=404, detail="game not generated yet")
-    ticket = secrets.token_urlsafe(32)
-    app.state.game_tickets[ticket] = (game, datetime.now(timezone.utc) + GAME_TICKET_TTL)
-    return {"ticket": ticket}
-
-
-@app.get("/games/{game}")
-async def serve_game(game: str, ticket: str | None = None) -> HTMLResponse:
-    # Served via a top-level browser navigation (window.open), which
-    # can't attach an X-API-Key header — a scoped single-use ticket
-    # (minted above) instead of the real key/session token, so nothing
-    # long-lived or broadly-valid ends up sitting in browser history,
-    # Referer headers, or proxy logs.
-    entry = app.state.game_tickets.pop(ticket or "", None)
-    if entry is None or entry[0] != game or entry[1] <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="invalid or expired ticket")
-    if game not in GAME_IDS:
-        raise HTTPException(status_code=404, detail=f"unknown game {game!r}")
-    path = _game_html_path(game)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="game not generated yet")
-    # Model-generated content serving itself as HTML — the extra
-    # lockdown costs nothing since a canvas game needs no network/frame
-    # access anyway, and caps the blast radius of anything the model
-    # slipped in (sandbox still allows the script the game itself needs).
-    return HTMLResponse(
-        content=path.read_text(encoding="utf-8"),
-        headers={
-            "Content-Security-Policy": "sandbox allow-scripts",
-            "Referrer-Policy": "no-referrer",
-        },
-    )

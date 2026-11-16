@@ -7,19 +7,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from jarvis.coding import TIER_ORDER
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODELS_DIR = REPO_ROOT / "models"
-
-
-def _clamped_tier(value: str) -> str:
-    """Falls back to "small" for an unrecognized tier name — a stale or
-    typo'd JARVIS_CODING_DEFAULT_TIER would otherwise KeyError on every
-    coding request (coding_models dict in app.py is keyed only by
-    TIER_ORDER's names), unlike coding.next_tier() which already clamps."""
-    return value if value in TIER_ORDER else "small"
 
 
 class Settings(BaseModel):
@@ -70,12 +60,15 @@ class Settings(BaseModel):
     )
 
     llm_host: str = Field(default_factory=lambda: os.getenv("JARVIS_LLM_HOST", "http://localhost:11434"))
-    # 1B over 3B: ~3x fewer params → noticeably faster on CPU-only inference.
-    # Local is now mostly an emergency fallback ("complexity" is the default
-    # route_strategy — simple queries go local, complex go cloud), so speed
-    # matters more than max quality here. Still officially multilingual
-    # incl. German (Meta's supported-language list).
-    llm_model: str = Field(default_factory=lambda: os.getenv("JARVIS_LLM_MODEL", "llama3.2:1b"))
+    # Swapped from llama3.2:1b to qwen3:4b (this fork, "jeanny kimi") for
+    # better answer quality on CPU — still small enough to stay fast as
+    # the local/fallback tier under "complexity" routing. Must be the
+    # "-instruct-2507" tag, not plain "qwen3:4b": that one is the hybrid
+    # thinking variant and burns ~7-8 min of reasoning tokens per turn on
+    # CPU even with no visible benefit for short voice answers (measured).
+    llm_model: str = Field(
+        default_factory=lambda: os.getenv("JARVIS_LLM_MODEL", "qwen3:4b-instruct-2507-q4_K_M")
+    )
     llm_timeout_s: float = Field(
         default_factory=lambda: float(os.getenv("JARVIS_LLM_TIMEOUT_S", "300"))
     )
@@ -172,91 +165,13 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("JARVIS_TTS_SAMPLE_RATE", "24000"))
     )
 
-    # Three coding-model tiers (separate from llm_model) for the background
-    # code-generation feature — see coding.py + orchestrator's
-    # coding_handler. Each runs as its own Ollama model load, independent
-    # of the voice-response model. Default tier is "small" (fast, loads
-    # quickly); a voice/text trigger ("größeres Modell", "code war
-    # schlecht", see coding.is_coding_upgrade_request) re-runs the same
-    # last coding request one tier up. 1.5b alone was unreliable (5
-    # distinct bug types across 5 attempts at a calculator) — it's kept
-    # as the "small" tier anyway since most requests are simple enough
-    # for it and it's by far the fastest; 3b improved a lot (real logic,
-    # clean structure) but still had one widget-API bug (OptionMenu.get())
-    # — used as "medium". 32b (~19GB) was tried but killed twice by the
-    # OS for memory pressure on this 32GB-RAM machine (<2GB free with it
-    # loaded) — not viable, so "large" stays at 14b (~9GB), the biggest
-    # size that actually fits alongside everything else running.
-    coding_model_small: str = Field(
-        default_factory=lambda: os.getenv("JARVIS_CODING_MODEL_SMALL", "qwen2.5-coder:1.5b")
-    )
-    coding_model_medium: str = Field(
-        default_factory=lambda: os.getenv("JARVIS_CODING_MODEL_MEDIUM", "qwen2.5-coder:7b")
-    )
-    # Historically the only tier (env var kept as JARVIS_CODING_MODEL,
-    # unchanged, for backward compatibility) — now the "large" tier.
-    coding_model: str = Field(
-        default_factory=lambda: os.getenv("JARVIS_CODING_MODEL", "qwen2.5-coder:14b")
-    )
-    coding_default_tier: str = Field(
-        default_factory=lambda: _clamped_tier(os.getenv("JARVIS_CODING_DEFAULT_TIER", "small"))
-    )
-    # Scripts can run longer than a chat answer; still capped so a
-    # runaway generation doesn't hang the background task indefinitely.
-    # 1500 truncated a real generation mid-script during live testing
-    # (correctly rejected by extract_python_code rather than running the
-    # truncated fragment) — bumped with the model size.
-    coding_max_tokens: int = Field(
-        default_factory=lambda: int(os.getenv("JARVIS_CODING_MAX_TOKENS", "2000"))
-    )
-    # Dedicated folder, not the project repo — generated scripts are
-    # user-facing artifacts, not project source. Auto-run, no confirmation
-    # step (explicit user choice); filenames are always generated (never
-    # taken from model output or speech), never overwriting anything else.
-    coding_scripts_dir: Path = Field(
-        default_factory=lambda: Path(
-            os.getenv("JARVIS_CODING_SCRIPTS_DIR", str(Path.home() / "Desktop" / "Jarvis_Scripts"))
-        )
-    )
-
-    # Browser-playable games (games.py), generated on request by the
-    # "large" coding-model tier and served as static HTML by remote_api.py
-    # — see games.py's module docstring for why this is safe to expose
-    # remotely even though the Python coding fast-path above isn't. A full
-    # game is a much longer generation than a coding-fastpath script, so
-    # it gets its own, far higher token cap rather than sharing
-    # coding_max_tokens.
-    game_max_tokens: int = Field(
-        default_factory=lambda: int(os.getenv("JARVIS_GAME_MAX_TOKENS", "8000"))
-    )
-    games_dir: Path = Field(
-        default_factory=lambda: Path(
-            os.getenv("JARVIS_GAMES_DIR", str(Path.home() / "Desktop" / "Jarvis_Games"))
-        )
-    )
-    # Generated games are smoke-checked in a sandboxed Node subprocess
-    # before being marked "done" (see games.py's build_smoke_harness) —
-    # a real bug shipped in practice (canvas-size/block-size mismatch
-    # throwing on load) that this would have caught automatically. On a
-    # smoke-check failure, remote_api.py's _generate_game retries ONCE
-    # with the SAME model tier (not a bigger one) — escalating to a
-    # bigger model (tried qwen2.5-coder:32b, then its lighter q3_K_M
-    # quant) was removed after both ended the same way live: Ollama
-    # dropped the connection shortly after the model switch and
-    # unloaded it, costing 15-20 minutes for nothing each time. The
-    # instability tracked the model switch itself, not just memory
-    # pressure.
-    game_smoke_timeout_s: float = Field(
-        default_factory=lambda: float(os.getenv("JARVIS_GAME_SMOKE_TIMEOUT_S", "15.0"))
-    )
-
     # Remote text-chat API (remote_api.py) — a separate, minimal FastAPI
     # app meant to be tunneled to the public internet so a Streamlit
     # Cloud frontend can reach this machine's LLM. Deliberately exposes
-    # ONLY plain chat (no coding_handler, no qa_matcher) — auto-running
-    # generated code on an internet-reachable endpoint would be a real
-    # RCE risk. Required (no default) so the server refuses to start
-    # wide open; set via env, never committed.
+    # ONLY plain chat (no qa_matcher side effects beyond fastpath_answer)
+    # — this fork dropped the coding/games generation features entirely
+    # for speed; see CLAUDE.md. Required (no default) so the server
+    # refuses to start wide open; set via env, never committed.
     remote_api_key: str = Field(
         default_factory=lambda: os.getenv("JARVIS_REMOTE_API_KEY", "")
     )

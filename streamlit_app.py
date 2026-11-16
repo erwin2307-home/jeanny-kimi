@@ -210,23 +210,11 @@ VOICE_WIDGET_HTML = r"""
     /* Same pill size as #talk-btn (14px/36px padding, 15px font) — only
        the gradient colors differ, so each big button reads as equally
        "primary" rather than talk-btn looking like the only real action. */
-    #cooldown-manual-btn, #games-btn {
+    #cooldown-manual-btn {
       border: none; border-radius: 999px; padding: 14px 36px;
       font-size: 15px; font-weight: 600; color: #05070c; cursor: pointer;
-    }
-    #cooldown-manual-btn {
       background: linear-gradient(180deg, #ffd270, #ffb020);
       box-shadow: 0 0 18px #ffb02088, 0 2px 0 #a86f0c inset;
-    }
-    #games-btn {
-      background: linear-gradient(180deg, #d9b3ff, #b388ff);
-      box-shadow: 0 0 18px #b388ff88, 0 2px 0 #6b4fa8 inset;
-    }
-    #games-choice { display: none; gap: 10px; }
-    #games-choice button {
-      border: 1px solid #b388ff; border-radius: 999px; padding: 8px 20px;
-      font-size: 13px; font-weight: 600; color: #b388ff; background: transparent;
-      cursor: pointer;
     }
   </style>
   <div id="ring-wrap">
@@ -235,13 +223,6 @@ VOICE_WIDGET_HTML = r"""
   </div>
   <button id="talk-btn" type="button">🎤 Gedrückt halten zum Sprechen</button>
   <button id="cooldown-manual-btn" type="button">❄️ Cool Down</button>
-  <button id="games-btn" type="button">🎮 Spiele</button>
-  <div id="games-choice">
-    <button id="game-tetris" type="button">Tetris</button>
-    <button id="game-pacman" type="button">Pac-Man</button>
-    <button id="game-aliens" type="button">Aliens</button>
-    <button id="game-halo" type="button">Halo</button>
-  </div>
   <div id="timers"></div>
   <div id="status-line">Button oder Leertaste (Ring anklicken) halten zum Sprechen</div>
   <div id="hint-line"></div>
@@ -264,12 +245,6 @@ VOICE_WIDGET_HTML = r"""
     const transcriptEl = document.getElementById("transcript");
     const talkBtn = document.getElementById("talk-btn");
     const cooldownManualBtn = document.getElementById("cooldown-manual-btn");
-    const gamesBtn = document.getElementById("games-btn");
-    const gamesChoiceEl = document.getElementById("games-choice");
-    const gameTetrisBtn = document.getElementById("game-tetris");
-    const gamePacmanBtn = document.getElementById("game-pacman");
-    const gameAliensBtn = document.getElementById("game-aliens");
-    const gameHaloBtn = document.getElementById("game-halo");
     const playFallback = document.getElementById("play-fallback");
     const timersEl = document.getElementById("timers");
     const hintLine = document.getElementById("hint-line");
@@ -449,98 +424,6 @@ VOICE_WIDGET_HTML = r"""
     choiceBioroboterBtn.addEventListener("click", () => startInstrumentTimer("Timer Bioroboter", 2 * 3600 + 55 * 60));
     continueBtn.addEventListener("click", () => handleCooldownContinue());
     cooldownManualBtn.addEventListener("click", () => startCooldown());
-    gamesBtn.addEventListener("click", () => {
-      gamesChoiceEl.style.display = gamesChoiceEl.style.display === "flex" ? "none" : "flex";
-    });
-
-    // Tetris/Pac-Man/Aliens: generated on request by the "large" coding
-    // model (see games.py/remote_api.py) and served as a static page —
-    // this just triggers generation, polls status, then opens the
-    // result in a new tab once it's ready. API_KEY here is already the
-    // short-lived session token (see render_voice_widget), safe to put
-    // in a query string for the new-tab navigation (window.open can't
-    // attach a custom header).
-    const GAME_POLL_MS = 3000;
-    const GAME_POLL_MAX_TRIES = 200; // ~10 min cap — a 14b-model full
-                                      // game generation can genuinely
-                                      // take minutes on CPU.
-
-    async function playGame(gameId, label) {
-      // Opened synchronously, inside the click handler itself — a
-      // window.open() called later (after the awaits below) loses the
-      // user-gesture context and most browsers silently block it as a
-      // popup. Navigating this already-open tab's location afterwards
-      // is not subject to that block.
-      const gameWin = window.open("", "_blank");
-      if (gameWin) {
-        gameWin.document.write(
-          "<body style='background:#05070c;color:#9fe8c0;font-family:sans-serif;" +
-          "display:flex;align-items:center;justify-content:center;height:100vh;'>" +
-          "<p>" + label + " wird programmiert …</p></body>"
-        );
-      }
-
-      try {
-        await fetch(API_URL.replace(/\/$/, "") + "/games/" + gameId + "/generate", {
-          method: "POST",
-          headers: { "X-API-Key": API_KEY },
-        });
-      } catch (e) {
-        cooldownHint(label + ": Fehler beim Starten — " + e);
-        return;
-      }
-      for (let i = 0; i < GAME_POLL_MAX_TRIES; i++) {
-        let status;
-        try {
-          const resp = await fetch(
-            API_URL.replace(/\/$/, "") + "/games/" + gameId + "/status",
-            { headers: { "X-API-Key": API_KEY } }
-          );
-          status = await resp.json();
-        } catch (e) {
-          cooldownHint(label + ": Fehler beim Abfragen — " + e);
-          return;
-        }
-        if (status.status === "done") {
-          // Single-use, 5-minute ticket instead of the real key/session
-          // token — this URL is a top-level navigation (browser
-          // history, Referer headers, proxy logs), not a header, so it
-          // shouldn't carry a long-lived or broadly-valid credential.
-          let ticket;
-          try {
-            const ticketResp = await fetch(
-              API_URL.replace(/\/$/, "") + "/games/" + gameId + "/ticket",
-              { method: "POST", headers: { "X-API-Key": API_KEY } }
-            );
-            ticket = (await ticketResp.json()).ticket;
-          } catch (e) {
-            cooldownHint(label + ": Fehler beim Öffnen — " + e);
-            return;
-          }
-          cooldownHint("");
-          const gameUrl = API_URL.replace(/\/$/, "") + "/games/" + gameId + "?ticket=" + encodeURIComponent(ticket);
-          if (gameWin && !gameWin.closed) gameWin.location.href = gameUrl;
-          else window.open(gameUrl, "_blank"); // tab was blocked/closed — try again, may still be blocked
-          return;
-        }
-        if (status.status === "error") {
-          cooldownHint(label + ": Generierung fehlgeschlagen — " + (status.error || "unbekannt"));
-          if (gameWin && !gameWin.closed) gameWin.close();
-          return;
-        }
-        const tokens = status.tokens || 0;
-        const maxTokens = status.max_tokens || 1;
-        const pct = Math.min(Math.round((tokens / maxTokens) * 100), 98);
-        cooldownHint(label + " wird programmiert … " + pct + "%");
-        await new Promise((r) => setTimeout(r, GAME_POLL_MS));
-      }
-      cooldownHint(label + ": dauert ungewöhnlich lange, bitte später erneut versuchen.");
-    }
-
-    gameTetrisBtn.addEventListener("click", () => playGame("tetris", "Tetris"));
-    gamePacmanBtn.addEventListener("click", () => playGame("pacman", "Pac-Man"));
-    gameAliensBtn.addEventListener("click", () => playGame("aliens", "Aliens"));
-    gameHaloBtn.addEventListener("click", () => playGame("halo", "Halo"));
 
     function handleCooldownContinue() {
       if (!cooldown || !cooldown.waitingForContinue) return;

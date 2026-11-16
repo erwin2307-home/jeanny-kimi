@@ -42,4 +42,4 @@ echo "Models in place:"
 ls -lh "$MODELS/openwakeword/" "$MODELS/piper/"
 echo
 echo "Note: Whisper model auto-downloads on first faster-whisper run."
-echo "Don't forget: ollama pull llama3.2:1b"
+echo "Don't forget: ollama pull qwen3:4b-instruct-2507-q4_K_M"
