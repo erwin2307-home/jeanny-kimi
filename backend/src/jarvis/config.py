@@ -60,15 +60,13 @@ class Settings(BaseModel):
     )
 
     llm_host: str = Field(default_factory=lambda: os.getenv("JARVIS_LLM_HOST", "http://localhost:11434"))
-    # Swapped from llama3.2:1b to qwen3:4b (this fork, "jeanny kimi") for
-    # better answer quality on CPU — still small enough to stay fast as
-    # the local/fallback tier under "complexity" routing. Must be the
-    # "-instruct-2507" tag, not plain "qwen3:4b": that one is the hybrid
-    # thinking variant and burns ~7-8 min of reasoning tokens per turn on
-    # CPU even with no visible benefit for short voice answers (measured).
-    llm_model: str = Field(
-        default_factory=lambda: os.getenv("JARVIS_LLM_MODEL", "qwen3:4b-instruct-2507-q4_K_M")
-    )
+    # Reverted to the original llama3.2:1b default (this fork briefly
+    # tried qwen3:4b-instruct-2507-q4_K_M, but it was too slow/unresponsive
+    # in practice on this hardware). llama3.2:1b stays the fast local/
+    # fallback tier for simple queries; complex queries still route to
+    # DeepSeek under "complexity" strategy (see route_strategy/use_cloud
+    # below) — that's unaffected by this model choice.
+    llm_model: str = Field(default_factory=lambda: os.getenv("JARVIS_LLM_MODEL", "llama3.2:1b"))
     llm_timeout_s: float = Field(
         default_factory=lambda: float(os.getenv("JARVIS_LLM_TIMEOUT_S", "300"))
     )

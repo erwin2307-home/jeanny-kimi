@@ -7,7 +7,7 @@ def test_defaults():
     assert s.ws_port == 8765
     assert s.sample_rate == 16000
     assert s.wake_word == "jarvis"
-    assert s.llm_model == "qwen3:4b-instruct-2507-q4_K_M"
+    assert s.llm_model == "llama3.2:1b"
     assert s.tts_voice == "de_DE-kerstin-low"
     assert s.tts_length_scale == 1.3
     assert "Illumina" in s.whisper_initial_prompt

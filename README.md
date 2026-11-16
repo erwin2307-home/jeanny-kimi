@@ -15,7 +15,7 @@ Phase 1 + 1.5 complete: Wake-word → STT → local LLM → TTS pipeline with Re
 ### Project setup
 1. `cd backend && uv sync` (or `pip install -e ".[dev]"`)
 2. `scripts/download_models.sh` — fetches OpenWakeWord "hey_jarvis" model + Piper German voice (~62MB total).
-3. `ollama pull qwen3:4b-instruct-2507-q4_K_M` (~2.5GB) — the local/fallback LLM. Must be this `-instruct-2507` tag, not plain `qwen3:4b` (that's the thinking variant, ~7-8 min/turn on CPU). This fork ("jeanny kimi") dropped the voice-triggered code-generation and browser-games features entirely for speed.
+3. `ollama pull llama3.2:1b` (~1.3GB) — the local/fallback LLM (original default; a qwen3:4b experiment was reverted — too slow in practice). Complex queries route to DeepSeek automatically (see `JARVIS_ROUTE_STRATEGY`/`JARVIS_DEEPSEEK_API_KEY`). This fork ("jeanny kimi") dropped the voice-triggered code-generation and browser-games features entirely for speed.
 4. `cd frontend && npm install`
 5. `scripts/dev.sh` to start backend + Tauri frontend together.
 
@@ -37,7 +37,7 @@ This is the human-driven verification step that completes Phase 1.5. All automat
 ### Pre-flight checklist
 
 - [ ] Ollama service running. Verify: `curl http://localhost:11434/api/version` returns JSON.
-- [ ] `ollama list` shows `qwen3:4b-instruct-2507-q4_K_M`.
+- [ ] `ollama list` shows `llama3.2:1b`.
 - [ ] `models/openwakeword/hey_jarvis_v0.1.tflite` exists (~1.3 MB).
 - [ ] TTS: default is `edge-tts` (Katja voice, needs internet, no setup) — `pip`/`uv` dependency only. Piper (`models/piper/de_DE-kerstin-low.onnx` + `.onnx.json`) is the offline fallback, set `JARVIS_TTS_BACKEND=piper` to use it.
 - [ ] MSVC link.exe available on PATH (try `cargo check` from `frontend/src-tauri/`).
