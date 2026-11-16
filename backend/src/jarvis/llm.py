@@ -102,11 +102,35 @@ def complexity_score(query: str) -> float:
 
 # ── Key loading helper ────────────────────────────────────────────────
 
-def _load_key(env_var: str, filename: str) -> str:
-    """env var first, then `filename` in the repo root. Empty if not found."""
+def _load_from_secrets_toml(secrets_key: str) -> str:
+    """Look up `secrets_key` in the local, gitignored
+    .streamlit/secrets.toml (repo root). Empty if the file or key is
+    missing — this file is optional, same role as the legacy .txt files
+    but consolidated into one place."""
+    import tomllib
+
+    repo_root = Path(__file__).resolve().parents[3]
+    candidate = repo_root / ".streamlit" / "secrets.toml"
+    if not candidate.is_file():
+        return ""
+    try:
+        data = tomllib.loads(candidate.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return ""
+    val = data.get(secrets_key, "")
+    return val.strip() if isinstance(val, str) else ""
+
+
+def _load_key(env_var: str, secrets_key: str, filename: str) -> str:
+    """env var first, then .streamlit/secrets.toml, then the legacy
+    `filename` in the repo root. Empty if not found anywhere."""
     import os
 
     val = os.getenv(env_var, "").strip()
+    if val:
+        return val
+
+    val = _load_from_secrets_toml(secrets_key)
     if val:
         return val
 
@@ -119,15 +143,17 @@ def _load_key(env_var: str, filename: str) -> str:
 
 
 def load_deepseek_key(env_var: str = "JARVIS_DEEPSEEK_API_KEY") -> str:
-    """Look up DeepSeek key. env var first, then Deepseek_api_key.txt in
-    the repo root. Returns empty string if not found."""
-    return _load_key(env_var, "Deepseek_api_key.txt")
+    """Look up DeepSeek key: env var, then DEEPSEEK_API_KEY in
+    .streamlit/secrets.toml, then the legacy Deepseek_api_key.txt in the
+    repo root. Returns empty string if not found."""
+    return _load_key(env_var, "DEEPSEEK_API_KEY", "Deepseek_api_key.txt")
 
 
 def load_groq_key(env_var: str = "JARVIS_GROQ_API_KEY") -> str:
-    """Look up Groq key. env var first, then Groq_api_key.txt in
-    the repo root. Returns empty string if not found."""
-    return _load_key(env_var, "Groq_api_key.txt")
+    """Look up Groq key: env var, then GROQ_API_KEY in
+    .streamlit/secrets.toml, then the legacy Groq_api_key.txt in the
+    repo root. Returns empty string if not found."""
+    return _load_key(env_var, "GROQ_API_KEY", "Groq_api_key.txt")
 
 
 def select_cloud_provider(*, groq_key: str, deepseek_key: str) -> Literal["groq", "deepseek"] | None:
