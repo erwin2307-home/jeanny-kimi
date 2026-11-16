@@ -207,6 +207,12 @@ VOICE_WIDGET_HTML = r"""
       cursor: pointer;
     }
     #cooldown-continue { display: none; }
+    #cooldown-alarm-stop { display: none; }
+    #cooldown-alarm-stop button {
+      border: 1px solid #ff4d4d; border-radius: 999px; padding: 8px 20px;
+      font-size: 13px; font-weight: 600; color: #ff4d4d; background: transparent;
+      cursor: pointer;
+    }
     /* Same pill size as #talk-btn (14px/36px padding, 15px font) — only
        the gradient colors differ, so each big button reads as equally
        "primary" rather than talk-btn looking like the only real action. */
@@ -233,6 +239,9 @@ VOICE_WIDGET_HTML = r"""
   <div id="cooldown-continue">
     <button id="continue-btn" type="button">Weiter ▶</button>
   </div>
+  <div id="cooldown-alarm-stop">
+    <button id="alarm-stop-btn" type="button">⏹ Stop</button>
+  </div>
   <button id="play-fallback" type="button" style="display:none;">▶️ Antwort abspielen</button>
   <div id="transcript"></div>
 
@@ -253,6 +262,8 @@ VOICE_WIDGET_HTML = r"""
     const choiceBioroboterBtn = document.getElementById("choice-bioroboter");
     const continueEl = document.getElementById("cooldown-continue");
     const continueBtn = document.getElementById("continue-btn");
+    const alarmStopEl = document.getElementById("cooldown-alarm-stop");
+    const alarmStopBtn = document.getElementById("alarm-stop-btn");
 
     // Real animal recordings (verified Wikimedia Commons .ogg files) mixed
     // with speech-synthesized meme alarm lines — using the browser's own
@@ -268,6 +279,43 @@ VOICE_WIDGET_HTML = r"""
       { type: "speech", text: "Warnung! Der Weltuntergang steht unmittelbar bevor!", lang: "de-DE" },
       { type: "speech", text: "Atomic missile will arrive in 3, 2, 1.", lang: "en-US" },
     ];
+
+    // Cool-down end alarm: "Hell's Bells" (AC/DC) for up to 20s, or until
+    // Stop is pressed. That song is commercial, copyrighted audio — it is
+    // deliberately NOT bundled in this repo or hotlinked from a public
+    // URL (unlike ALARMS above, which sticks to Wikimedia Commons/TTS for
+    // exactly that licensing reason). Drop your own legally-owned copy at
+    // sounds/cooldown_alarm.mp3 (gitignored — see .gitignore) on whatever
+    // machine actually plays it; if that file isn't there (e.g. on the
+    // public Streamlit Cloud deployment), playback just silently no-ops.
+    const COOLDOWN_ALARM_PATH = "sounds/cooldown_alarm.mp3";
+    const COOLDOWN_ALARM_MAX_MS = 20000;
+    let cooldownAlarmAudio = null;
+    let cooldownAlarmTimeout = null;
+    let cooldownAlarmOnDone = null;
+
+    function stopCooldownAlarm() {
+      if (cooldownAlarmTimeout) { clearTimeout(cooldownAlarmTimeout); cooldownAlarmTimeout = null; }
+      if (cooldownAlarmAudio) { cooldownAlarmAudio.pause(); cooldownAlarmAudio = null; }
+      alarmStopEl.style.display = "none";
+      const onDone = cooldownAlarmOnDone;
+      cooldownAlarmOnDone = null;
+      if (onDone) onDone();
+    }
+    alarmStopBtn.addEventListener("click", stopCooldownAlarm);
+
+    function playCooldownAlarm(onDone) {
+      cooldownAlarmOnDone = onDone || null;
+      const audio = new Audio(COOLDOWN_ALARM_PATH);
+      cooldownAlarmAudio = audio;
+      audio.addEventListener("ended", stopCooldownAlarm);
+      audio.play()
+        .then(() => {
+          alarmStopEl.style.display = "flex";
+          cooldownAlarmTimeout = setTimeout(stopCooldownAlarm, COOLDOWN_ALARM_MAX_MS);
+        })
+        .catch(() => stopCooldownAlarm()); // file missing/blocked — don't get stuck
+    }
 
     function playRandomAlarm() {
       const alarm = ALARMS[Math.floor(Math.random() * ALARMS.length)];
@@ -379,10 +427,12 @@ VOICE_WIDGET_HTML = r"""
       cooldown = { waitingForContinue: false };
       cooldownHint("Cool-down läuft: 30 Minuten");
       addTimer(30 * 60, "Cool Down", () => {
-        speakRepeated("Beadchips jetzt rausnehmen", "de-DE", 3, () => {
-          cooldown.waitingForContinue = "wash1";
-          cooldownHint("Sage 'weiter' oder klicke Weiter für Chip Wash 1");
-          continueEl.style.display = "flex";
+        playCooldownAlarm(() => {
+          speakRepeated("Beadchips jetzt rausnehmen", "de-DE", 3, () => {
+            cooldown.waitingForContinue = "wash1";
+            cooldownHint("Sage 'weiter' oder klicke Weiter für Chip Wash 1");
+            continueEl.style.display = "flex";
+          });
         });
       });
     }

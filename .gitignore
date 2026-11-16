@@ -40,3 +40,7 @@ remote_api_key.txt
 *.key
 .env
 .streamlit/secrets.toml
+
+# Copyrighted audio you supply yourself (e.g. cooldown alarm track) —
+# never committed/distributed from this repo.
+/sounds/
