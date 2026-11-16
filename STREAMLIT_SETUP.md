@@ -9,6 +9,16 @@ Scope: **text chat only**. No voice, no coding fast-path (auto-running
 generated scripts on an internet-reachable endpoint would be remote code
 execution — deliberately left out of `remote_api.py`), no QA fast-path.
 
+**One-click path:** `scripts/start-streamlit-remote.ps1` (desktop shortcut:
+"Jeanny") does steps 1-2 for you automatically — Ollama, the API, and a
+monitored tunnel — and generates a **fresh random `JARVIS_REMOTE_API_KEY`
+on every run** (never reused, written to `remote_api_key.txt`, gitignored).
+Since the tunnel URL also changes every run, you re-paste both into
+Streamlit Secrets after every start anyway — the watchdog window prints
+and clipboard-copies the exact `API_URL` / `API_KEY` block each time. Skip
+straight to step 4. The manual steps below are only for running the API
+by hand instead.
+
 ## 1. Run the local API
 
 ```bash

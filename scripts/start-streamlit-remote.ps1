@@ -9,11 +9,16 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendDir = Join-Path $RepoRoot "backend"
 $KeyFile = Join-Path $RepoRoot "remote_api_key.txt"
 
-if (-not (Test-Path $KeyFile)) {
-  Write-Host "error: $KeyFile not found. Generate one first (see STREAMLIT_SETUP.md)." -ForegroundColor Red
-  exit 1
-}
-$ApiKey = (Get-Content $KeyFile -Raw).Trim()
+# Fresh random session key on every start (never reused across restarts —
+# the tunnel URL changes every restart anyway, so the API key rotating
+# alongside it costs nothing extra: both get re-pasted into Streamlit
+# Secrets together via Announce-Secrets below). DeepSeek/Groq keys are
+# real external account credentials and are never touched here.
+$ApiKeyBytes = New-Object byte[] 32
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($ApiKeyBytes)
+$ApiKey = -join ($ApiKeyBytes | ForEach-Object { $_.ToString("x2") })
+Set-Content -Path $KeyFile -Value $ApiKey -Encoding utf8 -NoNewline
+Write-Host "ok: generated fresh session API key -> $KeyFile" -ForegroundColor Green
 
 # --- Resolve uv ---
 $UvBin = Get-Command uv -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
