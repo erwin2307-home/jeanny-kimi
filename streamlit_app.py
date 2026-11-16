@@ -10,9 +10,9 @@ entirely inside one self-contained JS widget (see VOICE_WIDGET_HTML
 below), talking to the tunnel URL directly from the browser. This is a
 deliberate split from the typed-text path (st.chat_input -> /chat),
 which goes through Streamlit's own Python server as usual: a plain
-components.html iframe has no channel back into Streamlit's session
-state, so the voice widget keeps its own small transcript rather than
-pretending to merge into the Python-side chat history below it.
+st.iframe has no channel back into Streamlit's session state, so the
+voice widget keeps its own small transcript rather than pretending to
+merge into the Python-side chat history below it.
 
 The widget is embedded via a SHORT-LIVED SESSION TOKEN, never the real
 JARVIS_REMOTE_API_KEY: this page is public once deployed to Streamlit
@@ -58,7 +58,6 @@ from __future__ import annotations
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Jeanny", page_icon="🤖")
 
@@ -177,7 +176,7 @@ VOICE_WIDGET_HTML = r"""
       min-height: 0; padding: 0 8px;
     }
     .timer-chip {
-      border: 3px solid #2b8cff; border-radius: 12px; padding: 4px 14px;
+      border: 3px solid #2b8cff; border-radius: 14px; padding: 6px 18px;
       background: rgba(43,140,255,0.08); text-align: center;
       box-shadow: 0 0 10px #2b8cff55; transition: all 0.3s ease;
       opacity: 0.7; transform: scale(0.85);
@@ -187,15 +186,15 @@ VOICE_WIDGET_HTML = r"""
       box-shadow: 0 0 22px #2b8cffcc; z-index: 5;
     }
     .timer-name {
-      color: #9fe8c0; font-size: 11px; font-weight: 600;
+      color: #9fe8c0; font-size: 14px; font-weight: 600;
       letter-spacing: 0.03em; text-transform: uppercase;
-      margin-bottom: 2px;
+      margin-bottom: 3px;
     }
     .timer-time {
       color: #ff3b3b; font-weight: 700; font-family: "Courier New", monospace;
-      font-size: 15px;
+      font-size: 19px;
     }
-    .timer-chip.timer-foreground .timer-time { font-size: 26px; }
+    .timer-chip.timer-foreground .timer-time { font-size: 32px; }
     #play-fallback {
       border: 1px solid #2b8cff; border-radius: 999px; padding: 6px 18px;
       font-size: 12px; color: #9fe8c0; background: transparent; cursor: pointer;
@@ -702,12 +701,11 @@ def render_voice_widget(api_url: str, voice_token: str) -> None:
     html = VOICE_WIDGET_HTML.replace("__API_URL__", api_url.replace('"', "")).replace(
         "__API_KEY__", voice_token.replace('"', "")
     )
-    # 540, not 380 — Cool Down + Spiele buttons (plus the Tetris/Pac-Man/
-    # Aliens/Halo reveal row, which can wrap to two lines on a narrow
-    # viewport) added below talk-btn pushed the flex column taller;
-    # components.html doesn't auto-size or scroll, so anything past the
-    # fixed height gets silently clipped.
-    components.html(html, height=540)
+    # 540, not 380 — Cool Down button + its timer chips/continue controls
+    # added below talk-btn pushed the flex column taller; st.iframe with a
+    # fixed int height doesn't auto-size or scroll, so anything past it
+    # gets silently clipped.
+    st.iframe(html, height=540)
 
 
 # API_KEY and API_URL come ONLY from st.secrets — never from a widget.
